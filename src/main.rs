@@ -6,6 +6,8 @@
 mod config;
 mod hw;
 mod support;
+mod protobuf;
+mod protobuf_server;
 
 use defmt_rtt as _; // global logger
 use panic_probe as _;
@@ -19,9 +21,7 @@ use stm32f1xx_hal::time::Hertz;
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
-use stm32f1xx_hal::pac::Interrupt;
-
-use usbd_serial::CdcAcmClass;
+use usbd_serial::SerialPort;
 
 use systick_monotonic::Systick;
 
@@ -199,7 +199,7 @@ mod app {
     #[shared]
     struct Shared {
         usb_device: UsbDevice<'static, UsbBusType>,
-        serial: CdcAcmClass<'static, UsbBus<Peripheral>>,
+        serial: SerialPort<'static, UsbBus<Peripheral>>,
         request_queue: heapless::Deque<Request, 1>,
     }
 
@@ -250,10 +250,7 @@ mod app {
             USB_BUS.replace(UsbBus::new(usb));
         }
 
-        let serial = CdcAcmClass::new(
-            unsafe { USB_BUS.as_ref().unwrap_unchecked() },
-            config::MAX_REQUEST_LEN,
-        );
+        let serial = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
 
         let usb_dev = UsbDeviceBuilder::new(
             unsafe { USB_BUS.as_ref().unwrap_unchecked() },
@@ -287,100 +284,76 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial, request_queue], priority = 1)]
+    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial], priority = 1)]
     fn usb_tx(ctx: usb_tx::Context) {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial = ctx.shared.serial;
-        let mut request_queue = ctx.shared.request_queue;
 
-        let request_pusher = move |request| request_queue.lock(|q| q.push_back(request));
-
-        if (&mut usb_device, &mut serial)
-            .lock(move |usb_device, serial| super::usb_poll(usb_device, serial, request_pusher))
-        {
-            cortex_m::peripheral::NVIC::mask(Interrupt::USB_HP_CAN_TX);
-            cortex_m::peripheral::NVIC::mask(Interrupt::USB_LP_CAN_RX0);
-        }
+        (&mut usb_device, &mut serial).lock(|usb_device, serial| usb_device.poll(&mut [serial]));
     }
 
     #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial, request_queue], priority = 1)]
     fn usb_rx0(ctx: usb_rx0::Context) {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial = ctx.shared.serial;
-        let mut request_queue = ctx.shared.request_queue;
 
-        let request_pusher = move |request| request_queue.lock(|q| q.push_back(request));
-
-        if (&mut usb_device, &mut serial)
-            .lock(move |usb_device, serial| super::usb_poll(usb_device, serial, request_pusher))
-        {
-            cortex_m::peripheral::NVIC::mask(Interrupt::USB_HP_CAN_TX);
-            cortex_m::peripheral::NVIC::mask(Interrupt::USB_LP_CAN_RX0);
-        }
+        (&mut usb_device, &mut serial).lock(|usb_device, serial| usb_device.poll(&mut [serial]));
     }
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial, request_queue], local = [])]
+    #[idle(shared=[serial], local = [])]
     fn idle(ctx: idle::Context) -> ! {
         let mut serial = ctx.shared.serial;
-        let mut request_queue = ctx.shared.request_queue;
 
         loop {
-            if let Some(req) = request_queue.lock(|q| q.pop_front()) {
-                unsafe {
-                    cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
-                    cortex_m::peripheral::NVIC::unmask(Interrupt::USB_LP_CAN_RX0);
-                }
-                defmt::debug!("Got request {}", defmt::Debug2Format(&req));
-                if let Err(e) = serial.lock(|serial| serial.write_packet(&req)) {
-                    defmt::error!("Failed to send response: {}", defmt::Debug2Format(&e));
-                }
-            }
+            let _ = serial.lock(|serial| protobuf_server::process(serial));
+            
             cortex_m::asm::wfi();
         }
     }
 }
 
-fn usb_poll<B: usb_device::bus::UsbBus, RP>(
-    usb_dev: &mut usb_device::prelude::UsbDevice<'static, B>,
-    serial: &mut CdcAcmClass<'static, B>,
-    mut request_pusher: RP,
-) -> bool // block interrupts?
-where
-    RP: FnMut(Request) -> Result<(), Request>,
-    B: usb_device::bus::UsbBus,
-{
-    use usb_device::UsbError;
-
-    let poll_res = usb_dev.poll(&mut [serial]);
-    if !poll_res {
-        return false;
-    }
-
-    let mut buf = Request::new();
-    buf.resize(config::MAX_REQUEST_LEN as usize, 0).ok();
-    let read_result = serial.read_packet(&mut buf);
-
-    match read_result {
-        Ok(count) => {
-            buf.resize(count, 0).ok(); // shrink to actual size
-            if let Err(_) = request_pusher(buf) {
-                defmt::error!("Request push failed, queue is full");
-                false
-            } else {
-                defmt::debug!("Got request {} bytes", count);
-                true
-            }
-        }
-        Err(UsbError::WouldBlock) => false,
-        Err(UsbError::BufferOverflow) => {
-            defmt::error!("BufferOverflow");
-            false
-        }
-        Err(e) => {
-            defmt::error!("Error: {}", defmt::Debug2Format(&e));
-            false
-        }
-    }
-}
+//fn usb_poll<B: usb_device::bus::UsbBus, RP>(
+//    usb_dev: &mut usb_device::prelude::UsbDevice<'static, B>,
+//    serial: &mut CdcAcmClass<'static, B>,
+//    mut request_pusher: RP,
+//) -> bool
+//// block interrupts?
+//where
+//    RP: FnMut(Request) -> Result<(), Request>,
+//    B: usb_device::bus::UsbBus,
+//{
+//    use usb_device::UsbError;
+//
+//    let poll_res = usb_dev.poll(&mut [serial]);
+//    if !poll_res {
+//        return false;
+//    }
+//
+//    let mut buf = Request::new();
+//    buf.resize(config::MAX_REQUEST_LEN as usize, 0).ok();
+//    let read_result = serial.read_packet(&mut buf);
+//
+//    match read_result {
+//        Ok(count) => {
+//            buf.resize(count, 0).ok(); // shrink to actual size
+//            if let Err(_) = request_pusher(buf) {
+//                defmt::error!("Request push failed, queue is full");
+//                false
+//            } else {
+//                defmt::debug!("Got request {} bytes", count);
+//                true
+//            }
+//        }
+//        Err(UsbError::WouldBlock) => false,
+//        Err(UsbError::BufferOverflow) => {
+//            defmt::error!("BufferOverflow");
+//            false
+//        }
+//        Err(e) => {
+//            defmt::error!("Error: {}", defmt::Debug2Format(&e));
+//            false
+//        }
+//    }
+//}
