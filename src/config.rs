@@ -14,5 +14,4 @@ pub const SYSTICK_RATE_HZ: u32 = 1_000;
 
 //-----------------------------------------------------------------------------
 
-pub const STR_MAX_LEN: usize = 64;
-pub type HlString = heapless::String<STR_MAX_LEN>;
+pub const MAX_REQUEST_LEN: u16 = 64;

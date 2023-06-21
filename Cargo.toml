@@ -22,15 +22,20 @@ usbd-serial = "0.1.1"
 
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 
-stm32f1xx-hal = { version = "0.9.0", features =["rt"], optional = true }
+stm32f1xx-hal = { version = "0.9.0", features = ["rt"], optional = true }
 
 cortex-m-rtic = { version = "1.1" }
 systick-monotonic = "1.0.1"
+
+prost = { version = "0.11", default-features = false, features = ["prost-derive"] }
 
 # defmt
 defmt = "0.3"
 defmt-macros = "0.3"
 defmt-rtt = "0.4"
+
+[build-dependencies]
+prost-build = "0.11"
 
 [profile.dev.package."*"]
 opt-level = "z"
@@ -38,6 +43,7 @@ opt-level = "z"
 [profile.dev]
 opt-level = "z"
 codegen-units = 1 # better optimizations
+debug = 2
 lto = false
 panic = "abort"
 debug-assertions = true
@@ -45,23 +51,14 @@ debug-assertions = true
 [profile.release]
 opt-level = "s"
 codegen-units = 1 # better optimizations
-debug = true # добавлять отладочные символы. Не влияет на размер исполняемого кода, зато работает дебаг
+debug = 2 # добавлять отладочные символы. Не влияет на размер исполняемого кода, зато работает дебаг
 panic = 'abort'
 lto = true
 
 [features]
 default = [
   "stm32f103b",
-  "defmt-debug",
 ]
 
 stm32f103b = ["stm32f103"]
 stm32f103 = ["stm32f1xx-hal/stm32f103", "stm32f1xx-hal/medium"] # косяк либы, для f103 не включена поддержка таймера 4
-
-# defmt: do NOT modify these features
-defmt-default = []
-defmt-trace = []
-defmt-debug = []
-defmt-info = []
-defmt-warn = []
-defmt-error = []

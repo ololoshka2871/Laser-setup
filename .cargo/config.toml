@@ -52,5 +52,5 @@ target = "thumbv7m-none-eabi"        # Cortex-M3
 b = "bloat -n 5"
 br = "bloat -n 5 --release"
 
-rb = "run --bin"
-rrb = "run --release --bin"
+rb = "run --bin laser-setup"
+rrb = "run --release --bin laser-setup"
