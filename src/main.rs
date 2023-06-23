@@ -309,7 +309,6 @@ mod app {
         {
             cortex_m::peripheral::NVIC::mask(Interrupt::USB_HP_CAN_TX);
         }
-        defmt::trace!("usb_tx");
     }
 
     #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial], priority = 1)]
@@ -321,7 +320,6 @@ mod app {
         {
             cortex_m::peripheral::NVIC::mask(Interrupt::USB_LP_CAN_RX0);
         }
-        defmt::trace!("usb_rx");
     }
 
     //-------------------------------------------------------------------------
@@ -331,7 +329,7 @@ mod app {
         let mut serial = ctx.shared.serial;
 
         loop {
-            match serial.lock(|serial| protobuf_server::process(serial)) {
+            match serial.lock(|serial| protobuf_server::process(serial, monotonics::now().ticks())) {
                 nb::Result::Ok(_) => { defmt::info!("Message processed");}
                 nb::Result::Err(nb::Error::WouldBlock) => unsafe {
                     cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
