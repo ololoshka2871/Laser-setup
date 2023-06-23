@@ -41,10 +41,12 @@ where
                         SIZE_BYTES[*byte_number] = b;
                     }
                     *byte_number += 1;
-                    if byte_number == &4 {
-                        if let Ok(v) = prost::decode_length_delimiter(unsafe { &SIZE_BYTES[..] }) {
+                    if b < 0x80 || byte_number == &4 {
+                        if let Ok(v) = prost::decode_length_delimiter(unsafe { &SIZE_BYTES[..*byte_number] }) {
                             if v > 0 && v <= max_len {
-                                defmt::trace!("Message size: {}", v);
+                                unsafe {
+                                    STAGE = DecodeStage::Magick;
+                                }
                                 return Ok(v);
                             } else {
                                 defmt::error!("Invalid message size: {}", v);

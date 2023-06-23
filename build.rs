@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-static PROTOBUF_FILE: &str = "ProtobufDevice_0000E007.proto";
+static PROTOBUF_FILE: &str = "ProtobufDevice_0000E008.proto";
 static PROTOBUF_DIR: &str = "src/protobuf";
 
 fn gen_protobuf() {

@@ -1,194 +1,61 @@
-//use core::fmt::Display;
-//
-//use alloc::vec;
-//use alloc::{sync::Arc, vec::Vec};
-//
-//use freertos_rust::{CurrentTask, Duration, FreeRtosError, Mutex};
-//
-//use prost::EncodeError;
-//use usb_device::UsbError;
-//use usbd_serial::SerialPort;
-//
-//use crate::{
-//    protobuf::{self, Stream},
-//    workmodes::output_storage::OutputStorage,
-//};
-//
-//struct SerialStream<'a, B: usb_device::bus::UsbBus> {
-//    serial_container: Arc<Mutex<SerialPort<'a, B>>>,
-//    max_size: Option<usize>,
-//}
-//
-//impl<'a, B: usb_device::bus::UsbBus> Stream<FreeRtosError> for SerialStream<'a, B> {
-//    fn read(&mut self, buf: &mut [u8]) -> Result<(), FreeRtosError> {
-//        loop {
-//            match self.serial_container.lock(Duration::infinite()) {
-//                Ok(mut serial) => {
-//                    match serial.read(buf) {
-//                        Ok(count) => {
-//                            if count > 0 {
-//                                //defmt::trace!("Serial: {} bytes ressived", count);
-//                                return Ok(());
-//                            } else {
-//                                Self::block_thread()
-//                            }
-//                        }
-//                        Err(UsbError::WouldBlock) => Self::block_thread(),
-//                        Err(_) => panic!(),
-//                    }
-//                }
-//                Err(e) => return Err(e),
-//            }
-//        }
-//    }
-//
-//    fn read_all(&mut self) -> Result<Vec<u8>, FreeRtosError> {
-//        if let Some(max_size) = &self.max_size {
-//            let mut data = vec![0u8; *max_size];
-//            match self.read(data.as_mut_slice()) {
-//                Ok(_) => Ok(data),
-//                Err(e) => Err(e),
-//            }
-//        } else {
-//            Err(FreeRtosError::OutOfMemory)
-//        }
-//    }
-//}
-//
-//impl<'a, B: usb_device::bus::UsbBus> SerialStream<'a, B> {
-//    fn new(serial_container: Arc<Mutex<SerialPort<'a, B>>>, max_size: Option<usize>) -> Self {
-//        Self {
-//            serial_container,
-//            max_size,
-//        }
-//    }
-//
-//    fn block_thread() {
-//        unsafe {
-//            let _ = freertos_rust::Task::current()
-//                .unwrap_unchecked()
-//                .take_notification(true, Duration::infinite());
-//        }
-//    }
-//}
-//
-//pub fn protobuf_server<B: usb_device::bus::UsbBus>(
-//    serial_container: Arc<Mutex<SerialPort<B>>>,
-//    output: Arc<Mutex<OutputStorage>>,
-//    cq: Arc<freertos_rust::Queue<super::sensor_processor::Command>>,
-//) -> ! {
-//    loop {
-//        let msg_size = match protobuf::recive_md_header(&mut SerialStream::new(
-//            serial_container.clone(),
-//            None,
-//        )) {
-//            Ok(size) => size,
-//            Err(e) => {
-//                print_error(e);
-//                continue;
-//            }
-//        };
-//
-//        let request = match protobuf::recive_message_body(&mut SerialStream::new(
-//            serial_container.clone(),
-//            Some(msg_size),
-//        )) {
-//            Ok(request) => request,
-//            Err(e) => {
-//                print_error(e);
-//                continue;
-//            }
-//        };
-//
-//        let id = request.id;
-//
-//        defmt::trace!("Protobuf: Request:\n{}", defmt::Debug2Format(&request));
-//
-//        let response = {
-//            let id = request.id;
-//            match protobuf::process_requiest(
-//                request,
-//                protobuf::new_response(id),
-//                &output,
-//                cq.as_ref(),
-//            ) {
-//                Ok(r) => r,
-//                Err(_) => {
-//                    defmt::error!("Failed to generate response");
-//                    continue;
-//                }
-//            }
-//        };
-//
-//        defmt::trace!("Protobuf: Response:\n{}", defmt::Debug2Format(&response));
-//
-//        if let Err(e) = write_responce(serial_container.clone(), response) {
-//            print_error(e);
-//        }
-//
-//        defmt::trace!("Protobuf: message id = {} processed succesfully", id);
-//    }
-//}
-//
-//fn print_error<E: Display>(e: E) {
-//    defmt::error!("Protobuf error: {}", defmt::Display2Format(&e));
-//}
-//
-//fn write_responce<B: usb_device::bus::UsbBus>(
-//    serial_container: Arc<Mutex<SerialPort<B>>>,
-//    response: protobuf::Response,
-//) -> Result<(), EncodeError> {
-//    let data = protobuf::encode_md_message(response)?;
-//    let mut buf = data.as_slice();
-//
-//    loop {
-//        match serial_container.lock(Duration::infinite()) {
-//            Ok(mut serial) => match serial.write(buf) {
-//                Ok(len) if len > 0 => {
-//                    //defmt::trace!("Serial: {} bytes writen", len);
-//                    if len == buf.len() {
-//                        return Ok(());
-//                    }
-//                    buf = &buf[len..];
-//                }
-//                _ => {}
-//            },
-//            Err(e) => panic!("{:?}", e),
-//        }
-//        CurrentTask::delay(Duration::ms(1));
-//    }
-//}
-
 use nb;
 
-use embedded_hal::serial::Read;
+use embedded_hal::serial::{Read, Write};
 
 use crate::protobuf;
 
 enum State {
     Idle,
-    ReciveHeader,
-    ReciveBody,
-    Process,
-    SendResponse,
+    ProcessBody,
 }
 
 pub fn process<S, E>(stream: &mut S) -> nb::Result<(), E>
 where
-    S: Read<u8, Error = E>,
+    S: Read<u8, Error = E> + Write<u8, Error = E>,
 {
-    static mut state: State = State::Idle;
+    static mut STATE: State = State::Idle;
+    static mut DATA_SIZE: usize = 0;
 
     loop {
-        match unsafe { &state } {
+        match unsafe { &STATE } {
             State::Idle => {
-                protobuf::recive_md_header(stream, /* protobuf::messages:: */ 1500)?;
-                unsafe { state = State::ReciveHeader };
+                let data_size = protobuf::recive_md_header(
+                    stream,
+                    core::mem::size_of::<protobuf::messages::Request>(),
+                )?;
+                defmt::trace!("Protobuf: Header recived, data size = {} bytes", data_size);
+                unsafe {
+                    STATE = State::ProcessBody;
+                    DATA_SIZE = data_size
+                };
             }
-            State::ReciveHeader => {}
-            State::ReciveBody => {}
-            State::Process => {}
-            State::SendResponse => {}
+            State::ProcessBody => {
+                let request = protobuf::recive_message_body(stream, unsafe { DATA_SIZE })?;
+                match request {
+                    Ok(request) => {
+                        let mut resp = protobuf::default_response(request.id);
+                        protobuf::process_requiest(request, &mut resp);
+                        if let Some(r) = protobuf::encode_md_message(resp)
+                            .as_slice()
+                            .iter()
+                            .map(|b| stream.write(*b))
+                            .skip_while(|res| res.is_ok()) // skip while ok
+                            .next()
+                        {
+                            // error while writing
+                            return Err(unsafe { r.err().unwrap_unchecked() });
+                        } else {
+                            // ok
+                            unsafe { STATE = State::Idle };
+                        }
+                    }
+                    Err(e) => {
+                        // error while decoding
+                        defmt::error!("Protobuf: Error while decoding request: {}", defmt::Display2Format(&e));
+                        unsafe { STATE = State::Idle };
+                    }
+                }
+            }
         }
     }
 }

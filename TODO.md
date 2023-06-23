@@ -7,6 +7,8 @@
     * [v] USB Serial
     * [v] protobuf .proto file
     * [x] prost требует alloc, похоже придется вернуться к [nanopb](https://github.com/ololoshka2871/stm32-usb-self-writer/commit/c4f8f7e56fec034d6a90f3b4a16bd9a481568fe4)
+        * [x] Тоже требует nanopb
+    * [x] Добавить malloc
     * [ ] Генерация кода
     * [ ] Обработка сообщений
     * [ ] Интеграция с KalibratorGUI

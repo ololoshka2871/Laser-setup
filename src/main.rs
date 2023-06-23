@@ -2,23 +2,30 @@
 #![no_std]
 #![feature(array_zip)]
 #![feature(macro_metavar_expr)]
+#![feature(alloc_error_handler)]
 
 mod config;
 mod hw;
-mod support;
 mod protobuf;
 mod protobuf_server;
+mod support;
 
 use defmt_rtt as _; // global logger
 use panic_probe as _;
+
+extern crate alloc;
+
+use umm_malloc;
 
 use rtic::app;
 
 use stm32f1xx_hal::flash::FlashExt;
 use stm32f1xx_hal::gpio::GpioExt;
+use stm32f1xx_hal::pac::Interrupt;
 use stm32f1xx_hal::rcc::{HPre, PPre};
 use stm32f1xx_hal::time::Hertz;
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
+
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
 use usbd_serial::SerialPort;
@@ -190,7 +197,14 @@ impl ClockConfigProvider for HighPerformanceClockConfigProvider {
 
 //-----------------------------------------------------------------------------
 
-type Request = heapless::Vec<u8, { config::MAX_REQUEST_LEN as usize }>;
+#[alloc_error_handler]
+fn oom(oom_layout: core::alloc::Layout) -> ! {
+    defmt::panic!("Out of memory: {:?}", defmt::Debug2Format(&oom_layout));
+}
+
+//-----------------------------------------------------------------------------
+
+static mut HEAP: [u8; config::HEAP_SIZE] = [0; config::HEAP_SIZE];
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM])]
 mod app {
@@ -200,7 +214,6 @@ mod app {
     struct Shared {
         usb_device: UsbDevice<'static, UsbBusType>,
         serial: SerialPort<'static, UsbBus<Peripheral>>,
-        request_queue: heapless::Deque<Request, 1>,
     }
 
     #[local]
@@ -222,7 +235,7 @@ mod app {
 
         let mut flash = ctx.device.FLASH.constrain();
 
-        let mut gpioa = ctx.device.GPIOA.split();
+        let gpioa = ctx.device.GPIOA.split();
         let mut gpiob = ctx.device.GPIOB.split();
 
         let mut usb_pull_up = gpiob.pb8.into_push_pull_output_with_state(
@@ -237,6 +250,10 @@ mod app {
         let clocks = HighPerformanceClockConfigProvider::freeze(&mut flash.acr);
 
         defmt::info!("\tClocks: {}", defmt::Debug2Format(&clocks));
+
+        unsafe { umm_malloc::init_heap(HEAP.as_mut_ptr() as usize, HEAP.len()) };
+
+        defmt::info!("\tHeap");
 
         let mono = Systick::new(ctx.core.SYST, clocks.sysclk().to_Hz());
 
@@ -275,7 +292,6 @@ mod app {
             Shared {
                 usb_device: usb_dev,
                 serial,
-                request_queue: heapless::Deque::new(),
             },
             Local {},
             init::Monotonics(mono),
@@ -289,15 +305,23 @@ mod app {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial = ctx.shared.serial;
 
-        (&mut usb_device, &mut serial).lock(|usb_device, serial| usb_device.poll(&mut [serial]));
+        if (&mut usb_device, &mut serial).lock(|usb_device, serial| usb_device.poll(&mut [serial]))
+        {
+            cortex_m::peripheral::NVIC::mask(Interrupt::USB_HP_CAN_TX);
+        }
+        defmt::trace!("usb_tx");
     }
 
-    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial, request_queue], priority = 1)]
+    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial], priority = 1)]
     fn usb_rx0(ctx: usb_rx0::Context) {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial = ctx.shared.serial;
 
         (&mut usb_device, &mut serial).lock(|usb_device, serial| usb_device.poll(&mut [serial]));
+        {
+            cortex_m::peripheral::NVIC::mask(Interrupt::USB_LP_CAN_RX0);
+        }
+        defmt::trace!("usb_rx");
     }
 
     //-------------------------------------------------------------------------
@@ -307,53 +331,18 @@ mod app {
         let mut serial = ctx.shared.serial;
 
         loop {
-            let _ = serial.lock(|serial| protobuf_server::process(serial));
+            match serial.lock(|serial| protobuf_server::process(serial)) {
+                nb::Result::Ok(_) => { defmt::info!("Message processed");}
+                nb::Result::Err(nb::Error::WouldBlock) => unsafe {
+                    cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
+                    cortex_m::peripheral::NVIC::unmask(Interrupt::USB_LP_CAN_RX0);
+                }
+                nb::Result::Err(nb::Error::Other(e)) => {
+                    defmt::error!("Error {} while processing request", e);
+                }
+            }
             
             cortex_m::asm::wfi();
         }
     }
 }
-
-//fn usb_poll<B: usb_device::bus::UsbBus, RP>(
-//    usb_dev: &mut usb_device::prelude::UsbDevice<'static, B>,
-//    serial: &mut CdcAcmClass<'static, B>,
-//    mut request_pusher: RP,
-//) -> bool
-//// block interrupts?
-//where
-//    RP: FnMut(Request) -> Result<(), Request>,
-//    B: usb_device::bus::UsbBus,
-//{
-//    use usb_device::UsbError;
-//
-//    let poll_res = usb_dev.poll(&mut [serial]);
-//    if !poll_res {
-//        return false;
-//    }
-//
-//    let mut buf = Request::new();
-//    buf.resize(config::MAX_REQUEST_LEN as usize, 0).ok();
-//    let read_result = serial.read_packet(&mut buf);
-//
-//    match read_result {
-//        Ok(count) => {
-//            buf.resize(count, 0).ok(); // shrink to actual size
-//            if let Err(_) = request_pusher(buf) {
-//                defmt::error!("Request push failed, queue is full");
-//                false
-//            } else {
-//                defmt::debug!("Got request {} bytes", count);
-//                true
-//            }
-//        }
-//        Err(UsbError::WouldBlock) => false,
-//        Err(UsbError::BufferOverflow) => {
-//            defmt::error!("BufferOverflow");
-//            false
-//        }
-//        Err(e) => {
-//            defmt::error!("Error: {}", defmt::Debug2Format(&e));
-//            false
-//        }
-//    }
-//}

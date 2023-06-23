@@ -7,7 +7,7 @@ enum INFO {
     PROTOCOL_VERSION = 1;
 
     // идентификатор стенда
-    PRESSURE_SELF_WRITER_ID = 0xE007;
+    LASER_SETUP_ID = 0xE007;
 
     // ИД, преднозначенный для поиска
     ID_DISCOVER = 0xFFFF;

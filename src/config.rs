@@ -14,4 +14,4 @@ pub const SYSTICK_RATE_HZ: u32 = 1_000;
 
 //-----------------------------------------------------------------------------
 
-pub const MAX_REQUEST_LEN: u16 = 64;
+pub const HEAP_SIZE: usize = 1024;
