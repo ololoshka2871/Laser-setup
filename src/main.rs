@@ -8,6 +8,7 @@ mod config;
 mod hw;
 mod protobuf;
 mod protobuf_server;
+mod shift;
 mod support;
 
 use defmt_rtt as _; // global logger
@@ -19,8 +20,11 @@ use umm_malloc;
 
 use rtic::app;
 
+use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::flash::FlashExt;
-use stm32f1xx_hal::gpio::GpioExt;
+use stm32f1xx_hal::gpio::{
+    Alternate, GpioExt, Output, PinState, PushPull, PA5, PA6, PA7, PB10, PB11,
+};
 use stm32f1xx_hal::pac::Interrupt;
 use stm32f1xx_hal::rcc::{HPre, PPre};
 use stm32f1xx_hal::time::Hertz;
@@ -210,6 +214,9 @@ static mut HEAP: [u8; config::HEAP_SIZE] = [0; config::HEAP_SIZE];
 mod app {
     use super::*;
 
+    use stm32f1xx_hal::pac::SPI1;
+    use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
+
     #[shared]
     struct Shared {
         usb_device: UsbDevice<'static, UsbBusType>,
@@ -217,7 +224,22 @@ mod app {
     }
 
     #[local]
-    struct Local {}
+    struct Local {
+        valve: PB10<Output<PushPull>>,
+        actuator: PB11<Output<PushPull>>,
+
+        shifter: shift::Shifter<
+            Spi<
+                SPI1,
+                Spi1NoRemap,
+                (PA5<Alternate<PushPull>>, NoMiso, PA7<Alternate<PushPull>>),
+                u8,
+            >,
+            PA6<Output<PushPull>>,
+            1,
+        >,
+        sr: shift::ShifterRef,
+    }
 
     #[monotonic(binds = SysTick, default = true)]
     type MonoTimer = Systick<{ config::SYSTICK_RATE_HZ }>;
@@ -235,17 +257,32 @@ mod app {
 
         let mut flash = ctx.device.FLASH.constrain();
 
-        let gpioa = ctx.device.GPIOA.split();
+        let mut gpioa = ctx.device.GPIOA.split();
         let mut gpiob = ctx.device.GPIOB.split();
 
-        let mut usb_pull_up = gpiob.pb8.into_push_pull_output_with_state(
-            &mut gpiob.crh,
-            if !config::USB_PULLUP_ACTVE_LEVEL {
-                stm32f1xx_hal::gpio::PinState::High
-            } else {
-                stm32f1xx_hal::gpio::PinState::Low
-            },
+        let mut afio = ctx.device.AFIO.constrain();
+
+        let actuator = gpiob
+            .pb11
+            .into_push_pull_output_with_state(&mut gpiob.crh, config::ACTUATOR_CLOSE_STATE);
+
+        let valve = gpiob
+            .pb10
+            .into_push_pull_output_with_state(&mut gpiob.crh, config::VALVE_ATMOSPHERE_STATE);
+
+        let mut usb_pull_up = gpiob
+            .pb8
+            .into_push_pull_output_with_state(&mut gpiob.crh, config::USB_PULLUP_ACTVE_LEVEL);
+
+        let (mosi, sck, lat) = (
+            gpioa.pa7.into_alternate_push_pull(&mut gpioa.crl),
+            gpioa.pa5.into_alternate_push_pull(&mut gpioa.crl),
+            gpioa
+                .pa6
+                .into_push_pull_output_with_state(&mut gpioa.crl, PinState::Low),
         );
+
+        defmt::info!("\tPins");
 
         let clocks = HighPerformanceClockConfigProvider::freeze(&mut flash.acr);
 
@@ -262,6 +299,20 @@ mod app {
             pin_dm: gpioa.pa11,
             pin_dp: gpioa.pa12,
         };
+
+        let spi1 = stm32f1xx_hal::spi::Spi::spi1(
+            ctx.device.SPI1,
+            (sck, NoMiso, mosi),
+            &mut afio.mapr,
+            embedded_hal::spi::MODE_0,
+            Hertz::MHz(1),
+            clocks,
+        );
+
+        let mut shifter = shift::Shifter::<_, _, 1>::new(spi1, lat);
+        let sr0 = shifter.add(8);
+
+        defmt::info!("\tSPI");
 
         unsafe {
             USB_BUS.replace(UsbBus::new(usb));
@@ -293,7 +344,12 @@ mod app {
                 usb_device: usb_dev,
                 serial,
             },
-            Local {},
+            Local {
+                actuator,
+                valve,
+                shifter,
+                sr: sr0,
+            },
             init::Monotonics(mono),
         )
     }
@@ -324,11 +380,17 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial], local = [])]
+    #[idle(shared=[serial], local = [actuator, valve, shifter, sr])]
     fn idle(ctx: idle::Context) -> ! {
         let mut serial = ctx.shared.serial;
+        let actuator = ctx.local.actuator;
+        let valve = ctx.local.valve;
+        let shifter = ctx.local.shifter;
+        let sr = *ctx.local.sr;
 
         let mut current_control_state = protobuf::Control::default();
+
+        shifter.set(sr, channel2value(0), true);
 
         loop {
             match serial.lock(|serial| {
@@ -352,10 +414,55 @@ mod app {
 
             if current_control_state.is_updated() {
                 defmt::info!("Updated control state: {}", current_control_state);
+
+                actuator.set_state(control2pin_state(
+                    current_control_state.actuator_state
+                        == protobuf::messages::ActuatorState::Close,
+                    config::ACTUATOR_CLOSE_STATE,
+                ));
+
+                valve.set_state(control2pin_state(
+                    current_control_state.valve_state == protobuf::messages::ValveState::Atmosphere,
+                    config::VALVE_ATMOSPHERE_STATE,
+                ));
+
+                shifter.set(sr, channel2value(current_control_state.selected_channel), true);
+
                 current_control_state.reset();
             }
 
             cortex_m::asm::wfi();
+        }
+    }
+}
+
+pub(crate) fn control2pin_state(control_state: bool, default_state: PinState) -> PinState {
+    match default_state {
+        PinState::High => {
+            if control_state {
+                PinState::High
+            } else {
+                PinState::Low
+            }
+        }
+        PinState::Low => {
+            if control_state {
+                PinState::Low
+            } else {
+                PinState::High
+            }
+        }
+    }
+}
+
+pub(crate) fn channel2value(channel: u32) -> usize {
+    let v = ((channel << 1) | 1) as usize;
+    match channel {
+        0..=7 => v,
+        8..=15 => v << 4,
+        _ => {
+            defmt::error!("Invalid channel {}", channel);
+            0
         }
     }
 }
