@@ -9,7 +9,7 @@ enum State {
     ProcessBody,
 }
 
-pub fn process<S, E>(stream: &mut S, now: u64) -> nb::Result<(), E>
+pub fn process<S, E>(stream: &mut S, now: u64, current_control_state: &mut protobuf::Control) -> nb::Result<(), E>
 where
     S: Read<u8, Error = E> + Write<u8, Error = E>,
 {
@@ -35,7 +35,7 @@ where
                     Ok(request) => {
                         defmt::debug!("Protobuf Request Id: {}", request.id);
                         let mut resp = protobuf::default_response(request.id, now);
-                        protobuf::process_requiest(request, &mut resp);
+                        protobuf::process_requiest(request, &mut resp, current_control_state);
                         if let Some(r) = protobuf::encode_md_message(resp)
                             .as_slice()
                             .iter()

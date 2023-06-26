@@ -37,6 +37,9 @@ message Request {
     required uint32             deviceID = 2;
     // версия протокола запрашивающего
     required uint32             protocolVersion = 3;
+
+    // Запрос управления
+    optional ControlRequest     control = 20;
 }
 
 // Общий ответ сервера
@@ -51,6 +54,43 @@ message Response {
     required STATUS             Global_status = 4;
     // таймштамп устройства, когда фактически был сгененрирован ответ
     required fixed64            timestamp = 5;
+
+    // Статус управления
+    optional ControlResponse    control = 20;
+}
+
+//-----------------------------------------------------------------------------
+
+enum ActuatorState {
+    // Камера закрыта
+    Close = 0;
+    // Камера открыта
+    Open = 1;
+}
+
+enum ValveState {
+    // Камера соединена с атмосферой
+    Atmosphere = 0;
+    // Камера соединена с вакуумным насосом
+    Vacuum = 1;
+}
+
+message ControlRequest {
+    // Управление актуатором
+    optional ActuatorState    actuator_state = 1;
+    // Управление клапаном
+    optional ValveState       valve_state = 2;
+    // Выбор канала
+    optional uint32           select_channel = 3;
+}
+
+message ControlResponse {
+    // Статус актуатора
+    required ActuatorState    actuator_state = 1;
+    // Статус клапана
+    required ValveState       valve_state = 2;
+    // Выбранный канал
+    required uint32           selected_channel = 3;
 }
 
 //-----------------------------------------------------------------------------

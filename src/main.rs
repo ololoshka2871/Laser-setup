@@ -328,18 +328,33 @@ mod app {
     fn idle(ctx: idle::Context) -> ! {
         let mut serial = ctx.shared.serial;
 
+        let mut current_control_state = protobuf::Control::default();
+
         loop {
-            match serial.lock(|serial| protobuf_server::process(serial, monotonics::now().ticks())) {
-                nb::Result::Ok(_) => { defmt::info!("Message processed");}
+            match serial.lock(|serial| {
+                protobuf_server::process(
+                    serial,
+                    monotonics::now().ticks(),
+                    &mut current_control_state,
+                )
+            }) {
+                nb::Result::Ok(_) => {
+                    defmt::info!("Message processed");
+                }
                 nb::Result::Err(nb::Error::WouldBlock) => unsafe {
                     cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
                     cortex_m::peripheral::NVIC::unmask(Interrupt::USB_LP_CAN_RX0);
-                }
+                },
                 nb::Result::Err(nb::Error::Other(e)) => {
                     defmt::error!("Error {} while processing request", e);
                 }
             }
-            
+
+            if current_control_state.is_updated() {
+                defmt::info!("Updated control state: {}", current_control_state);
+                current_control_state.reset();
+            }
+
             cortex_m::asm::wfi();
         }
     }
