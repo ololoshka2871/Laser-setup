@@ -153,6 +153,7 @@ impl HighPerformanceClockConfigProvider {
         clocks
     }
 }
+
 impl ClockConfigProvider for HighPerformanceClockConfigProvider {
     fn core_frequency() -> Hertz {
         let f = crate::config::XTAL_FREQ / Self::ppl_div2val(PLL_P_DIV) * PLL_MUL
@@ -305,7 +306,7 @@ mod app {
             (sck, NoMiso, mosi),
             &mut afio.mapr,
             embedded_hal::spi::MODE_0,
-            Hertz::MHz(1),
+            Hertz::MHz(4),
             clocks,
         );
 
