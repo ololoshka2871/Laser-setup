@@ -23,7 +23,8 @@ use rtic::app;
 use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::flash::FlashExt;
 use stm32f1xx_hal::gpio::{
-    Alternate, GpioExt, Output, PinState, PushPull, PA5, PA6, PA7, PB10, PB11,
+    Alternate, GpioExt, IOPinSpeed, Output, OutputSpeed, PinState, PushPull, PA5, PA6, PA7, PB10,
+    PB11,
 };
 use stm32f1xx_hal::pac::Interrupt;
 use stm32f1xx_hal::rcc::{HPre, PPre};
@@ -275,13 +276,17 @@ mod app {
             .pb8
             .into_push_pull_output_with_state(&mut gpiob.crh, config::USB_PULLUP_ACTVE_LEVEL);
 
-        let (mosi, sck, lat) = (
+        let (mut mosi, mut sck, mut lat) = (
             gpioa.pa7.into_alternate_push_pull(&mut gpioa.crl),
             gpioa.pa5.into_alternate_push_pull(&mut gpioa.crl),
             gpioa
                 .pa6
                 .into_push_pull_output_with_state(&mut gpioa.crl, PinState::Low),
         );
+
+        mosi.set_speed(&mut gpioa.crl, IOPinSpeed::Mhz2);
+        sck.set_speed(&mut gpioa.crl, IOPinSpeed::Mhz2);
+        lat.set_speed(&mut gpioa.crl, IOPinSpeed::Mhz2);
 
         defmt::info!("\tPins");
 
@@ -306,7 +311,7 @@ mod app {
             (sck, NoMiso, mosi),
             &mut afio.mapr,
             embedded_hal::spi::MODE_0,
-            Hertz::MHz(4),
+            Hertz::MHz(1),
             clocks,
         );
 
@@ -323,7 +328,7 @@ mod app {
 
         let usb_dev = UsbDeviceBuilder::new(
             unsafe { USB_BUS.as_ref().unwrap_unchecked() },
-            usb_device::prelude::UsbVidPid(0x16c0, 0x27d),
+            usb_device::prelude::UsbVidPid(0x0483, 0x5720),
         )
         .manufacturer("SCTBElpa")
         .product("laser-setup")
@@ -373,7 +378,7 @@ mod app {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial = ctx.shared.serial;
 
-        (&mut usb_device, &mut serial).lock(|usb_device, serial| usb_device.poll(&mut [serial]));
+        if (&mut usb_device, &mut serial).lock(|usb_device, serial| usb_device.poll(&mut [serial]))
         {
             cortex_m::peripheral::NVIC::mask(Interrupt::USB_LP_CAN_RX0);
         }
@@ -405,8 +410,13 @@ mod app {
                     defmt::info!("Message processed");
                 }
                 nb::Result::Err(nb::Error::WouldBlock) => unsafe {
-                    cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
-                    cortex_m::peripheral::NVIC::unmask(Interrupt::USB_LP_CAN_RX0);
+                    // Да, именно так, иначе висяки с некоторыми USB контроллерами.
+                    cortex_m::interrupt::free(|_| {
+                        cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
+                        cortex_m::peripheral::NVIC::unmask(Interrupt::USB_LP_CAN_RX0);
+
+                        cortex_m::asm::wfi();
+                    });
                 },
                 nb::Result::Err(nb::Error::Other(e)) => {
                     defmt::error!("Error {} while processing request", e);
@@ -427,12 +437,14 @@ mod app {
                     config::VALVE_ATMOSPHERE_STATE,
                 ));
 
-                shifter.set(sr, channel2value(current_control_state.selected_channel), true);
+                shifter.set(
+                    sr,
+                    channel2value(current_control_state.selected_channel),
+                    true,
+                );
 
                 current_control_state.reset();
             }
-
-            cortex_m::asm::wfi();
         }
     }
 }
