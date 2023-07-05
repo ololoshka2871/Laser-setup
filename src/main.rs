@@ -23,8 +23,8 @@ use rtic::app;
 use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::flash::FlashExt;
 use stm32f1xx_hal::gpio::{
-    Alternate, GpioExt, IOPinSpeed, Output, OutputSpeed, PinState, PushPull, PA5, PA6, PA7, PB10,
-    PB11,
+    Alternate, GpioExt, IOPinSpeed, OpenDrain, Output, OutputSpeed, PinState, PushPull, PA5, PA6,
+    PA7, PB10, PB11,
 };
 use stm32f1xx_hal::pac::Interrupt;
 use stm32f1xx_hal::rcc::{HPre, PPre};
@@ -234,10 +234,10 @@ mod app {
             Spi<
                 SPI1,
                 Spi1NoRemap,
-                (PA5<Alternate<PushPull>>, NoMiso, PA7<Alternate<PushPull>>),
+                (PA5<Alternate<OpenDrain>>, NoMiso, PA7<Alternate<OpenDrain>>),
                 u8,
             >,
-            PA6<Output<PushPull>>,
+            PA6<Output<OpenDrain>>,
             1,
         >,
         sr: shift::ShifterRef,
@@ -276,16 +276,18 @@ mod app {
             .pb8
             .into_push_pull_output_with_state(&mut gpiob.crh, config::USB_PULLUP_ACTVE_LEVEL);
 
-        let (mut mosi, mut sck, mut lat) = (
-            gpioa.pa7.into_alternate_push_pull(&mut gpioa.crl),
-            gpioa.pa5.into_alternate_push_pull(&mut gpioa.crl),
+        let (/*mut*/ mosi, /*mut*/ sck, mut lat) = (
+            gpioa.pa7.into_alternate_open_drain(&mut gpioa.crl),
+            gpioa.pa5.into_alternate_open_drain(&mut gpioa.crl),
             gpioa
                 .pa6
-                .into_push_pull_output_with_state(&mut gpioa.crl, PinState::Low),
+                .into_open_drain_output_with_state(&mut gpioa.crl, PinState::Low),
         );
 
+        /*
         mosi.set_speed(&mut gpioa.crl, IOPinSpeed::Mhz2);
         sck.set_speed(&mut gpioa.crl, IOPinSpeed::Mhz2);
+        */
         lat.set_speed(&mut gpioa.crl, IOPinSpeed::Mhz2);
 
         defmt::info!("\tPins");
@@ -311,7 +313,7 @@ mod app {
             (sck, NoMiso, mosi),
             &mut afio.mapr,
             embedded_hal::spi::MODE_0,
-            Hertz::MHz(1),
+            Hertz::kHz(500),
             clocks,
         );
 
