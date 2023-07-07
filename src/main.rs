@@ -218,6 +218,7 @@ mod app {
 
     use stm32f1xx_hal::pac::SPI1;
     use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
+    use embedded_hal::blocking::spi::Write;
 
     #[shared]
     struct Shared {
@@ -308,7 +309,7 @@ mod app {
             pin_dp: gpioa.pa12,
         };
 
-        let spi1 = stm32f1xx_hal::spi::Spi::spi1(
+        let mut spi1 = stm32f1xx_hal::spi::Spi::spi1(
             ctx.device.SPI1,
             (sck, NoMiso, mosi),
             &mut afio.mapr,
@@ -316,6 +317,8 @@ mod app {
             Hertz::kHz(500),
             clocks,
         );
+
+        spi1.write(&[0x00, 0x00]).ok();
 
         let mut shifter = shift::Shifter::<_, _, 1>::new(spi1, lat);
         let sr0 = shifter.add(8);
