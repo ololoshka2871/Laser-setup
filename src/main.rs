@@ -24,7 +24,7 @@ use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::flash::FlashExt;
 use stm32f1xx_hal::gpio::{
     Alternate, GpioExt, IOPinSpeed, OpenDrain, Output, OutputSpeed, PinState, PushPull, PA5, PA6,
-    PA7, PB10, PB11,
+    PA7, PB10, PB11, PB6, PB7,
 };
 use stm32f1xx_hal::pac::Interrupt;
 use stm32f1xx_hal::rcc::{HPre, PPre};
@@ -216,9 +216,9 @@ static mut HEAP: [u8; config::HEAP_SIZE] = [0; config::HEAP_SIZE];
 mod app {
     use super::*;
 
-    use stm32f1xx_hal::pac::SPI1;
-    use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
     use embedded_hal::blocking::spi::Write;
+    use stm32f1xx_hal::pac::{I2C1, SPI1};
+    use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
 
     #[shared]
     struct Shared {
@@ -242,13 +242,17 @@ mod app {
             1,
         >,
         sr: shift::ShifterRef,
+        i2c1: stm32f1xx_hal::i2c::BlockingI2c<
+            I2C1,
+            (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>),
+        >,
     }
 
     #[monotonic(binds = SysTick, default = true)]
     type MonoTimer = Systick<{ config::SYSTICK_RATE_HZ }>;
 
     #[init]
-    fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+    fn init(mut ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         static mut USB_BUS: Option<usb_device::bus::UsbBusAllocator<UsbBusType>> = None;
 
         if cfg!(debug_assertions) {
@@ -257,6 +261,10 @@ mod app {
         }
 
         defmt::info!("Init...");
+
+        ctx.core.DCB.enable_trace();
+        ctx.core.DWT.enable_cycle_counter();
+        defmt::info!("DWT...");
 
         let mut flash = ctx.device.FLASH.constrain();
 
@@ -325,6 +333,25 @@ mod app {
 
         defmt::info!("\tSPI");
 
+        let i2c1 = stm32f1xx_hal::i2c::BlockingI2c::i2c1(
+            ctx.device.I2C1,
+            (
+                gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
+                gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl),
+            ),
+            &mut afio.mapr,
+            stm32f1xx_hal::i2c::Mode::Standard {
+                frequency: Hertz::kHz(100),
+            },
+            clocks,
+            1000,
+            2,
+            1000,
+            1000,
+        );
+
+        defmt::info!("\tI2C");
+
         unsafe {
             USB_BUS.replace(UsbBus::new(usb));
         }
@@ -360,6 +387,7 @@ mod app {
                 valve,
                 shifter,
                 sr: sr0,
+                i2c1,
             },
             init::Monotonics(mono),
         )
@@ -391,30 +419,54 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial], local = [actuator, valve, shifter, sr])]
+    #[idle(shared=[serial], local = [actuator, valve, shifter, sr, i2c1])]
     fn idle(ctx: idle::Context) -> ! {
         let mut serial = ctx.shared.serial;
         let actuator = ctx.local.actuator;
         let valve = ctx.local.valve;
         let shifter = ctx.local.shifter;
         let sr = *ctx.local.sr;
+        let i2c1 = ctx.local.i2c1;
 
         let mut current_control_state = protobuf::Control::default();
 
         shifter.set(sr, channel2value(0), true);
 
+        let mut start = monotonics::now();
+        let mut reset = false;
         loop {
+            let cycle_start = monotonics::now();
             match serial.lock(|serial| {
                 protobuf_server::process(
                     serial,
                     monotonics::now().ticks(),
                     &mut current_control_state,
+                    &mut [i2c1],
+                    if reset {
+                        reset = false;
+                        true
+                    } else {
+                        false
+                    },
                 )
             }) {
                 nb::Result::Ok(_) => {
-                    defmt::info!("Message processed");
+                    let success_stop = monotonics::now();
+                    defmt::debug!(
+                        "Message processed ({} ms)",
+                        (success_stop - cycle_start).to_millis()
+                    );
                 }
                 nb::Result::Err(nb::Error::WouldBlock) => unsafe {
+                    let step_now = monotonics::now();
+                    let duration = step_now - start;
+
+                    if duration.to_millis() > crate::config::COMMAND_TIMEOUT_MS {
+                        defmt::trace!("Control timeout");
+                        reset = true;
+                        start = step_now;
+                    }
+
                     // Да, именно так, иначе висяки с некоторыми USB контроллерами.
                     cortex_m::interrupt::free(|_| {
                         cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);

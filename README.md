@@ -5,6 +5,8 @@
 Use [probe-run](https://github.com/knurling-rs/probe-run) and [flip-link](https://github.com/knurling-rs/flip-link)
 1. `cargo {rb,rrb}` - flash debug/release and run
 2. `cargo br` - view the [bloat](https://github.com/RazrFalcon/cargo-bloat) report
+log level: [export DEFMT_LOG=<lvl>](https://defmt.ferrous-systems.com/filtering.html#defmt_log)
+Pass `-- --no-flash` to `cargo rb` to skip flashing.
 
 # Connection
 
@@ -35,8 +37,8 @@ PB10
 | PA2 | ENC2 |
 | PA3 | ENC_BT |
 
-### Дисплей
+### Датчик (частотомер)
 | PIN | Назначение |
-| --- | --- |
-| PB6 | SCL |
-| PB7 | SDA |
+| --- | ---- |
+| PB6 | SCL1 |
+| PB7 | SDA1 |

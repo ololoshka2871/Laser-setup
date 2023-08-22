@@ -14,6 +14,9 @@ pub const USB_PULLUP_ACTVE_LEVEL: PinState = PinState::High;
 // systick rate
 pub const SYSTICK_RATE_HZ: u32 = 1_000;
 
+// command timeout
+pub const COMMAND_TIMEOUT_MS: u64 = 100;
+
 //-----------------------------------------------------------------------------
 
 // heap size

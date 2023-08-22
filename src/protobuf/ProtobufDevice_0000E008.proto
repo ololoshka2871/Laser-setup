@@ -4,7 +4,7 @@ package ru.sktbelpa.laser_setup;
 
 enum INFO {
     // верися этого протокола
-    PROTOCOL_VERSION = 1;
+    PROTOCOL_VERSION = 2;
 
     // идентификатор стенда
     LASER_SETUP_ID = 0xE008;
@@ -24,6 +24,9 @@ enum STATUS {
     // недопустимое значение поля
     ERRORS_IN_SUBCOMMANDS = 1;
 
+    // I2C error
+    I2C = 20;
+
     PROTOCOL_ERROR = 100;
 }
 
@@ -40,6 +43,9 @@ message Request {
 
     // Запрос управления
     optional ControlRequest     control = 20;
+
+    // Запрос действия по I2C
+    optional I2CRequest         i2c = 40;
 }
 
 // Общий ответ сервера
@@ -57,6 +63,9 @@ message Response {
 
     // Статус управления
     optional ControlResponse    control = 20;
+
+    // Ответ действия по I2C
+    optional I2CResponse        i2c = 40;
 }
 
 //-----------------------------------------------------------------------------
@@ -82,6 +91,7 @@ message ControlRequest {
     optional ValveState       valve_state = 2;
     // Выбор канала
     optional uint32           select_channel = 3;
+
 }
 
 message ControlResponse {
@@ -91,6 +101,108 @@ message ControlResponse {
     required ValveState       valve_state = 2;
     // Выбранный канал
     required uint32           selected_channel = 3;
+}
+
+//-----------------------------------------------------------------------------
+
+message I2CRequest {
+    oneof Request {
+        // запрос на перечисление устройств
+        Empty           Enumerate = 1; 
+
+        // операции чтения/записи
+        I2CSequence     Sequence = 2;
+    }
+}
+
+message I2CResponse {
+    oneof Response {
+        // Перечисление устройств
+        I2CEnumerateResponse    Enumerate = 1;
+
+        // результаы операций чтения/записи
+        I2CSequenceResult       Sequence = 2;
+    }
+}
+
+message I2CBus {
+    // bus id
+    required uint32 bus = 1;
+    // supported speed max
+    required uint32 max_speed = 2;
+};
+
+message I2CEnumerateResponse {
+    // список шин
+    repeated I2CBus buses = 1;
+}
+
+message I2CSequence {
+    // bus id
+    required uint32 bus = 1;
+    // slave address
+    required uint32 address = 2;
+    
+    repeated I2COperation Operations = 3;
+}
+
+message I2COperation {
+    oneof Operation {
+        // запись
+        I2CWriteRequest Write = 1;
+        // чтение
+        I2CReadRequest  Read = 2;
+    }
+}
+
+message I2CSequenceResult {
+    // bus id
+    required uint32 bus = 1;
+    // slave address
+    required uint32 address = 2;
+    
+    repeated I2CResult Operations = 3;
+}
+
+message I2CResult {
+    oneof Operation {
+        // запись
+        I2CResultCode Write = 1;
+        // чтение
+        I2CReadResponse  Read = 2;
+    }
+}
+
+enum I2CResultCode {
+    // успешное завершение
+    I2C_OK = 0;
+    // invalid bus
+    I2C_INVALID_BUS = 1;
+    // too long data
+    I2C_TOO_LONG_DATA = 2;
+    // I2C_NAK
+    I2C_NAK = 20;
+}
+
+message I2CWriteRequest {
+    // slave address
+    required uint32 address = 2;
+    // data
+    required bytes  data = 3;
+}
+
+message I2CReadRequest {
+    // slave address
+    required uint32 address = 2;
+    // data
+    required uint32 length = 3;
+}
+
+message I2CReadResponse {
+    // data
+    required bytes  data = 3;
+    // status
+    required I2CResultCode status = 4;
 }
 
 //-----------------------------------------------------------------------------

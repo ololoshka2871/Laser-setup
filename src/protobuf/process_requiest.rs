@@ -1,5 +1,5 @@
 pub fn process_requiest(
-    req: super::messages::Request,
+    req: &super::messages::Request,
     resp: &mut super::messages::Response,
     current_control_state: &mut super::Control,
 ) {
@@ -23,7 +23,7 @@ pub fn process_requiest(
         return;
     }
 
-    if let Some(control) = req.control {
+    if let Some(control) = &req.control {
         super::process_control::process_control(&control, current_control_state);
         resp.control = Some(current_control_state.into_response());
     }
