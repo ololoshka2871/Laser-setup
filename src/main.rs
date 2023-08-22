@@ -457,7 +457,7 @@ mod app {
                         (success_stop - cycle_start).to_millis()
                     );
                 }
-                nb::Result::Err(nb::Error::WouldBlock) => unsafe {
+                nb::Result::Err(nb::Error::WouldBlock) => {
                     let step_now = monotonics::now();
                     let duration = step_now - start;
 
@@ -468,11 +468,11 @@ mod app {
                     }
 
                     // Да, именно так, иначе висяки с некоторыми USB контроллерами.
-                    cortex_m::interrupt::free(|_| {
+                    cortex_m::interrupt::free(|_| unsafe {
                         cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
                         cortex_m::peripheral::NVIC::unmask(Interrupt::USB_LP_CAN_RX0);
 
-                        cortex_m::asm::wfi();
+                        //cortex_m::asm::wfi();
                     });
                 },
                 nb::Result::Err(nb::Error::Other(e)) => {
