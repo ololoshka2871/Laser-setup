@@ -85,6 +85,11 @@ where
     }
 }
 
+/// Process I2C request
+/// req - request
+/// resp - response
+/// i2c_buses - list of I2C buses available
+/// return true if no errors
 fn process_i2c<I2CE>(
     req: &Option<I2cRequest>,
     resp: &mut Option<I2cResponse>,
@@ -206,7 +211,7 @@ fn process_i2c<I2CE>(
                                         status: match &res {
                                             Ok(_) => messages::I2cResultCode::I2cOk as i32,
                                             Err(_e) => {
-                                                error_found = true;
+                                                                                                error_found = true;
                                                 messages::I2cResultCode::I2cNak as i32
                                             }
                                         },
@@ -229,7 +234,7 @@ fn process_i2c<I2CE>(
                     response: Some(Response::Sequence(r)),
                 });
 
-                error_found
+                !error_found
             }
             None => true,
         }
