@@ -37,6 +37,8 @@ use usbd_serial::SerialPort;
 
 use systick_monotonic::Systick;
 
+use i2c_hung_fix::HangFixPins;
+
 use support::clocking::{ClockConfigProvider, MyConfig};
 
 use hw::{ADC_DEVIDER, AHB_DEVIDER, APB1_DEVIDER, APB2_DEVIDER, PLL_MUL, PLL_P_DIV, USB_DEVIDER};
@@ -305,7 +307,7 @@ mod app {
 
         let clocks = HighPerformanceClockConfigProvider::freeze(&mut flash.acr);
 
-        let my_delay = MyDelay {
+        let mut my_delay = MyDelay {
             sys_clk: clocks.sysclk(),
         };
 
@@ -339,12 +341,19 @@ mod app {
 
         defmt::info!("\tSPI");
 
+        let mut i2c_pins = (
+            gpiob.pb6.into_push_pull_output(&mut gpiob.crl),
+            gpiob.pb7.into_floating_input(&mut gpiob.crl),
+        );
+
+        i2c_pins.try_unhang_i2c(&mut my_delay).expect("I2C unhang failed");
+        let i2c_pins = (
+            i2c_pins.0.into_alternate_open_drain(&mut gpiob.crl),
+            i2c_pins.1.into_alternate_open_drain(&mut gpiob.crl),
+        );
         let i2c1 = stm32f1xx_hal::i2c::BlockingI2c::i2c1(
             ctx.device.I2C1,
-            (
-                gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
-                gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl),
-            ),
+            i2c_pins,
             &mut afio.mapr,
             stm32f1xx_hal::i2c::Mode::Standard {
                 frequency: Hertz::kHz(100),
@@ -471,9 +480,6 @@ mod app {
                         /* Это все не работает да еще и ломает USB на `periph.GPIOB.split();`
                         let reset_start = monotonics::now();
                         unsafe {
-                            #[allow(unused_imports)]
-                            use i2c_hung_fix::HangFixPins;
-
                             // try reset and restore i2c module
                             let periph = stm32f1xx_hal::pac::Peripherals::steal();
                             let i2c1 = periph.I2C1;
