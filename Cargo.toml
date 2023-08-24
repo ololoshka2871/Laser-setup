@@ -24,6 +24,7 @@ usbd-serial = "0.1.1"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 
 stm32f1xx-hal = { version = "0.9.0", features = ["rt"], optional = true }
+i2c_hung_fix = "0.1"
 
 cortex-m-rtic = { version = "1.1" }
 systick-monotonic = "1.0.1"

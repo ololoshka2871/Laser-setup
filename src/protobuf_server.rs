@@ -20,7 +20,7 @@ pub fn process<S, E, I2CE>(
     current_control_state: &mut protobuf::Control,
     i2c_buses: &mut I2CBussesList<'_, I2CE>,
     force_reset: bool,
-) -> nb::Result<u64, E>
+) -> nb::Result<(u64, bool), E>
 where
     S: Read<u8, Error = E> + Write<u8, Error = E>,
 {
@@ -52,7 +52,8 @@ where
                         let mut resp = protobuf::default_response(request.id, now);
                         protobuf::process_requiest(&request, &mut resp, current_control_state);
 
-                        if !process_i2c(&request.i2c, &mut resp.i2c, i2c_buses) {
+                        let need_reset = !process_i2c(&request.i2c, &mut resp.i2c, i2c_buses);
+                        if need_reset {
                             resp.global_status = messages::Status::I2c as i32;
                         }
 
@@ -68,7 +69,7 @@ where
                         } else {
                             // ok
                             unsafe { STATE = State::Idle };
-                            return Ok(now);
+                            return Ok((now, need_reset));
                         }
                     }
                     Err(e) => {
@@ -211,7 +212,7 @@ fn process_i2c<I2CE>(
                                         status: match &res {
                                             Ok(_) => messages::I2cResultCode::I2cOk as i32,
                                             Err(_e) => {
-                                                                                                error_found = true;
+                                                error_found = true;
                                                 messages::I2cResultCode::I2cNak as i32
                                             }
                                         },

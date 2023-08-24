@@ -246,6 +246,8 @@ mod app {
             I2C1,
             (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>),
         >,
+
+        my_delay: MyDelay,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -303,6 +305,10 @@ mod app {
 
         let clocks = HighPerformanceClockConfigProvider::freeze(&mut flash.acr);
 
+        let my_delay = MyDelay {
+            sys_clk: clocks.sysclk(),
+        };
+
         defmt::info!("\tClocks: {}", defmt::Debug2Format(&clocks));
 
         unsafe { umm_malloc::init_heap(HEAP.as_mut_ptr() as usize, HEAP.len()) };
@@ -347,7 +353,7 @@ mod app {
             1000,
             2,
             1000,
-            1000,
+            10000, // должен успеть проходить SCL stretch
         );
 
         defmt::info!("\tI2C");
@@ -388,6 +394,7 @@ mod app {
                 shifter,
                 sr: sr0,
                 i2c1,
+                my_delay,
             },
             init::Monotonics(mono),
         )
@@ -419,7 +426,7 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial], local = [actuator, valve, shifter, sr, i2c1])]
+    #[idle(shared=[serial], local = [actuator, valve, shifter, sr, i2c1, my_delay])]
     fn idle(ctx: idle::Context) -> ! {
         let mut serial = ctx.shared.serial;
         let actuator = ctx.local.actuator;
@@ -427,6 +434,9 @@ mod app {
         let shifter = ctx.local.shifter;
         let sr = *ctx.local.sr;
         let i2c1 = ctx.local.i2c1;
+
+        #[allow(unused_variables)]
+        let my_delay = ctx.local.my_delay;
 
         let mut current_control_state = protobuf::Control::default();
 
@@ -450,12 +460,65 @@ mod app {
                     },
                 )
             }) {
-                nb::Result::Ok(_) => {
+                nb::Result::Ok((_, need_reset)) => {
                     let success_stop = monotonics::now();
                     defmt::debug!(
                         "Message processed ({} ms)",
                         (success_stop - cycle_start).to_millis()
                     );
+
+                    if need_reset {
+                        /* Это все не работает да еще и ломает USB на `periph.GPIOB.split();`
+                        let reset_start = monotonics::now();
+                        unsafe {
+                            #[allow(unused_imports)]
+                            use i2c_hung_fix::HangFixPins;
+
+                            // try reset and restore i2c module
+                            let periph = stm32f1xx_hal::pac::Peripherals::steal();
+                            let i2c1 = periph.I2C1;
+                            let rcc = periph.RCC;
+                            //let mut gpiob = periph.GPIOB.split();
+
+                            i2c1.cr1.write(|w| w.pe().clear_bit());
+
+                            let crv_val = i2c1.ccr.read().bits();
+                            let trise_val = i2c1.trise.read().bits();
+                            let ccr_val = i2c1.ccr.read().bits();
+
+                            <I2C1 as stm32f1xx_hal::rcc::Reset>::reset(&rcc);
+
+                            i2c1.cr1.write(|w| w.pe().set_bit().swrst().set_bit());
+                            i2c1.cr1.reset();
+
+                            /*
+                            let mut pins = (
+                                gpiob.pb6.into_push_pull_output(&mut gpiob.crl),
+                                gpiob.pb7.into_floating_input(&mut gpiob.crl),
+                            );
+
+                            pins.try_unhang_i2c(my_delay).expect("I2C unhang failed");
+                            let _pins = (
+                                pins.0.into_alternate_open_drain(&mut gpiob.crl),
+                                pins.1.into_alternate_open_drain(&mut gpiob.crl),
+                            );
+                            */
+
+                            i2c1.cr2.write(|w| w.bits(crv_val));
+
+                            i2c1.cr1.write(|w| w.pe().clear_bit());
+
+                            i2c1.trise.write(|w| w.bits(trise_val));
+                            i2c1.ccr.write(|w| w.bits(ccr_val));
+
+                            i2c1.cr1.modify(|_, w| w.pe().set_bit());
+                        }
+                        defmt::warn!(
+                            "Resetting I2C1 ({} ms)",
+                            (monotonics::now() - reset_start).to_millis()
+                        );
+                        */
+                    }
                 }
                 nb::Result::Err(nb::Error::WouldBlock) => {
                     let step_now = monotonics::now();
@@ -474,7 +537,7 @@ mod app {
 
                         //cortex_m::asm::wfi();
                     });
-                },
+                }
                 nb::Result::Err(nb::Error::Other(e)) => {
                     defmt::error!("Error {} while processing request", e);
                 }
@@ -534,5 +597,15 @@ pub(crate) fn channel2value(channel: u32) -> usize {
             defmt::error!("Invalid channel {}", channel);
             0
         }
+    }
+}
+
+pub struct MyDelay {
+    pub sys_clk: Hertz,
+}
+
+impl embedded_hal::blocking::delay::DelayUs<u32> for MyDelay {
+    fn delay_us(&mut self, us: u32) {
+        cortex_m::asm::delay(self.sys_clk.to_MHz() * us);
     }
 }
