@@ -3,7 +3,7 @@ authors = ["ololoshka2871"]
 edition = "2018"
 readme = "README.md"
 name = "laser-setup"
-version = "0.4.2"
+version = "0.4.3"
 resolver = "2"
 
 [dependencies]
