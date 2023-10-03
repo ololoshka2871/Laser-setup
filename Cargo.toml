@@ -12,6 +12,7 @@ libm = "0.2.5"
 vcell = "0.1.3"
 nb = "1.1.0"
 umm-malloc = { version = "0.3.2", features = ["cortex-m-interrupt-critical-section"] }
+cfg-if = "1"
 
 embedded-hal = { version = "0.2.4", features = ["unproven"] }
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
@@ -64,3 +65,4 @@ default = [
 
 stm32f103b = ["stm32f103"]
 stm32f103 = ["stm32f1xx-hal/stm32f103", "stm32f1xx-hal/medium"] # косяк либы, для f103 не включена поддержка таймера 4
+gd32 = []

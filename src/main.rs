@@ -26,7 +26,9 @@ use stm32f1xx_hal::gpio::{
     PA7, PB10, PB11, PB6, PB7,
 };
 use stm32f1xx_hal::pac::Interrupt;
+use stm32f1xx_hal::pac::{I2C1, SPI1};
 use stm32f1xx_hal::rcc::{HPre, PPre};
+use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
 use stm32f1xx_hal::time::Hertz;
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
 
@@ -213,13 +215,35 @@ fn oom(oom_layout: core::alloc::Layout) -> ! {
 
 static mut HEAP: [u8; config::HEAP_SIZE] = [0; config::HEAP_SIZE];
 
+cfg_if::cfg_if! { if #[cfg( feature = "gd32" )] {
+    type TShifter =shift::Shifter<
+    Spi<
+        SPI1,
+        Spi1NoRemap,
+        (PA5<Alternate<PushPull>>, NoMiso, PA7<Alternate<PushPull>>),
+        u8,
+    >,
+    PA6<Output<PushPull>>,
+    1,
+>;
+} else {
+    type TShifter =shift::Shifter<
+    Spi<
+        SPI1,
+        Spi1NoRemap,
+        (PA5<Alternate<OpenDrain>>, NoMiso, PA7<Alternate<OpenDrain>>),
+        u8,
+    >,
+    PA6<Output<OpenDrain>>,
+    1,
+>;
+}}
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM])]
 mod app {
     use super::*;
 
     use embedded_hal::blocking::spi::Write;
-    use stm32f1xx_hal::pac::{I2C1, SPI1};
-    use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
 
     #[shared]
     struct Shared {
@@ -232,16 +256,8 @@ mod app {
         valve: PB10<Output<PushPull>>,
         actuator: PB11<Output<PushPull>>,
 
-        shifter: shift::Shifter<
-            Spi<
-                SPI1,
-                Spi1NoRemap,
-                (PA5<Alternate<OpenDrain>>, NoMiso, PA7<Alternate<OpenDrain>>),
-                u8,
-            >,
-            PA6<Output<OpenDrain>>,
-            1,
-        >,
+        shifter: TShifter,
+
         sr: shift::ShifterRef,
         i2c1: stm32f1xx_hal::i2c::BlockingI2c<
             I2C1,
@@ -288,13 +304,23 @@ mod app {
             .pb8
             .into_push_pull_output_with_state(&mut gpiob.crh, config::USB_PULLUP_ACTVE_LEVEL);
 
-        let (/*mut*/ mosi, /*mut*/ sck, mut lat) = (
-            gpioa.pa7.into_alternate_open_drain(&mut gpioa.crl),
-            gpioa.pa5.into_alternate_open_drain(&mut gpioa.crl),
-            gpioa
-                .pa6
-                .into_open_drain_output_with_state(&mut gpioa.crl, PinState::Low),
-        );
+        cfg_if::cfg_if! { if #[cfg( feature = "gd32" )] {
+            let (/*mut*/ mosi, /*mut*/ sck, mut lat) = (
+                gpioa.pa7.into_alternate_push_pull(&mut gpioa.crl),
+                gpioa.pa5.into_alternate_push_pull(&mut gpioa.crl),
+                gpioa
+                    .pa6
+                    .into_open_drain_output_with_state(&mut gpioa.crl, PinState::Low),
+            );
+        } else {
+            let (/*mut*/ mosi, /*mut*/ sck, mut lat) = (
+                gpioa.pa7.into_alternate_open_drain(&mut gpioa.crl),
+                gpioa.pa5.into_alternate_open_drain(&mut gpioa.crl),
+                gpioa
+                    .pa6
+                    .into_open_drain_output_with_state(&mut gpioa.crl, PinState::Low),
+            );
+        }};
 
         /*
         mosi.set_speed(&mut gpioa.crl, IOPinSpeed::Mhz2);
@@ -345,7 +371,9 @@ mod app {
             gpiob.pb7.into_floating_input(&mut gpiob.crl),
         );
 
-        i2c_pins.try_unhang_i2c(&mut my_delay).expect("I2C unhang failed");
+        i2c_pins
+            .try_unhang_i2c(&mut my_delay)
+            .expect("I2C unhang failed");
         let i2c_pins = (
             i2c_pins.0.into_alternate_open_drain(&mut gpiob.crl),
             i2c_pins.1.into_alternate_open_drain(&mut gpiob.crl),
