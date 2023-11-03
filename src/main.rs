@@ -352,13 +352,13 @@ mod app {
             i2c_pins,
             &mut afio.mapr,
             stm32f1xx_hal::i2c::Mode::Standard {
-                frequency: Hertz::kHz(100),
+                frequency: Hertz::kHz(400),
             },
             clocks,
-            1000,
-            2,
-            1000,
-            10000, // должен успеть проходить SCL stretch
+            20000,
+            1,
+            20000,
+            20000, // должен успеть проходить SCL stretch
         );
 
         defmt::info!("\tI2C");
