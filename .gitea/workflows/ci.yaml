@@ -11,6 +11,9 @@ jobs:
   build:
     runs-on: rust-stm32
     steps:
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        
       - name: Install flip-link
         run: |
           cargo install flip-link
