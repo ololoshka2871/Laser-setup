@@ -1,9 +1,8 @@
 use core::usize;
 
-use nb;
-
 use embedded_hal::serial::Read;
 
+#[derive(Clone, Copy)]
 enum DecodeStage {
     Magick,
     Size(usize),
@@ -17,7 +16,7 @@ where
     static mut SIZE_BYTES: [u8; 4] = [0; 4];
 
     loop {
-        match { unsafe { &mut STAGE } } {
+        match { unsafe { &mut *core::ptr::addr_of_mut!(STAGE) } } {
             DecodeStage::Magick => {
                 match stream.read() {
                     Ok(magick) => {
@@ -42,7 +41,9 @@ where
                     }
                     *byte_number += 1;
                     if b < 0x80 || byte_number == &4 {
-                        if let Ok(v) = prost::decode_length_delimiter(unsafe { &SIZE_BYTES[..*byte_number] }) {
+                        if let Ok(v) =
+                            prost::decode_length_delimiter(unsafe { &SIZE_BYTES[..*byte_number] })
+                        {
                             if v > 0 && v <= max_len {
                                 unsafe {
                                     STAGE = DecodeStage::Magick;

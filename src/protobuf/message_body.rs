@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use nb;
 
 use embedded_hal::serial::Read;
 use prost::Message;
@@ -14,7 +13,7 @@ where
     static mut BODY: Option<Vec<u8>> = None;
 
     loop {
-        match unsafe { &mut BODY } {
+        match unsafe { &mut *core::ptr::addr_of_mut!(BODY) } {
             Some(body) => {
                 if body.len() == size {
                     let res = super::messages::Request::decode(body.as_slice());

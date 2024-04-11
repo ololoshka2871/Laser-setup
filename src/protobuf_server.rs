@@ -1,5 +1,3 @@
-use nb;
-
 use embedded_hal::blocking::i2c::WriteRead;
 use embedded_hal::serial::{Read, Write};
 
@@ -34,7 +32,7 @@ where
             }
         }
 
-        match unsafe { &STATE } {
+        match unsafe { &*core::ptr::addr_of_mut!(STATE) } {
             State::Idle => {
                 let data_size =
                     protobuf::recive_md_header(stream, core::mem::size_of::<messages::Request>())?;
