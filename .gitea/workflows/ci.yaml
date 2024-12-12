@@ -24,7 +24,7 @@ jobs:
         run: cargo build --release
 
       - name: Create binary dist
-        run: arm-none-eabi-objcopy -O binary target/thumbv7m-none-eabi/release/rk-meter-agc-pll rk-meter-agc-pll.bin
+        run: arm-none-eabi-objcopy -O binary target/thumbv7m-none-eabi/release/laser-setup laser-setup.bin
 
       - uses: SebRollen/toml-action@v1.2.0
         id: read_version
@@ -38,4 +38,4 @@ jobs:
           body: This is an automatic ${{ steps.read_version.outputs.value }} release!
           prerelease: true
           files: |
-            rk-meter-agc-pll.bin
+            laser-setup.bin
