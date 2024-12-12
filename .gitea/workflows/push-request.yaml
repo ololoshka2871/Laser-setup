@@ -1,0 +1,25 @@
+name: Pull Request Workflow
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - master
+      - "*/*"
+
+jobs:
+  build-windows:
+    runs-on: rust-stm32
+    steps:
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Install flip-link
+        run: cargo install flip-link
+      
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build
+        run: cargo build --release
